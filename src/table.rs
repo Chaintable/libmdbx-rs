@@ -36,7 +36,7 @@ impl<'txn> Table<'txn> {
         Ok(Self::new_from_ptr(dbi))
     }
 
-    pub(crate) fn new_from_ptr(dbi: ffi::MDBX_dbi) -> Self {
+    pub fn new_from_ptr(dbi: ffi::MDBX_dbi) -> Self {
         Self {
             dbi,
             _marker: PhantomData,
