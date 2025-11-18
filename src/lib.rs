@@ -1,44 +1,74 @@
-#![allow(clippy::type_complexity, clippy::unnecessary_cast)]
 #![doc = include_str!("../README.md")]
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/paradigmxyz/reth/main/assets/reth-docs.png",
+    html_favicon_url = "https://avatars0.githubusercontent.com/u/97369466?s=256",
+    issue_tracker_base_url = "https://github.com/paradigmxyz/reth/issues/"
+)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![allow(missing_docs, clippy::needless_pass_by_ref_mut)]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![allow(clippy::borrow_as_ptr)]
 
 pub use crate::{
     codec::*,
-    cursor::{Cursor, IntoIter, Iter, IterDup},
-    database::{
-        Database, DatabaseKind, DatabaseOptions, Info, NoWriteMap, PageSize, Stat, WriteMap,
+    cursor::{Cursor, Iter, IterDup},
+    database::Database,
+    environment::{
+        Environment, EnvironmentBuilder, EnvironmentKind, Geometry, HandleSlowReadersCallback,
+        HandleSlowReadersReturnCode, Info, PageSize, Stat,
     },
     error::{Error, Result},
     flags::*,
-    table::Table,
-    transaction::{RO, RW, Transaction, TransactionKind},
+    transaction::{CommitLatency, Transaction, TransactionKind, RO, RW},
 };
+
+#[cfg(feature = "read-tx-timeouts")]
+pub use crate::environment::read_transactions::MaxReadTransactionDuration;
 
 mod codec;
 mod cursor;
 mod database;
+mod environment;
 mod error;
 mod flags;
-mod table;
 mod transaction;
+mod txn_manager;
 
-/// Fully typed ORM for use with libmdbx.
-#[cfg(feature = "orm")]
-#[cfg_attr(docsrs, doc(cfg(feature = "orm")))]
-pub mod orm;
+#[cfg(test)]
+mod test_utils {
+    use super::*;
+    use byteorder::{ByteOrder, LittleEndian};
+    use tempfile::tempdir;
 
-#[cfg(feature = "orm")]
-mod orm_uses {
-    #[doc(hidden)]
-    pub use arrayref;
+    /// Regression test for <https://github.com/danburkert/lmdb-rs/issues/21>.
+    /// This test reliably segfaults when run against lmdb compiled with opt level -O3 and newer
+    /// GCC compilers.
+    #[test]
+    fn issue_21_regression() {
+        const HEIGHT_KEY: [u8; 1] = [0];
 
-    #[doc(hidden)]
-    pub use impls;
+        let dir = tempdir().unwrap();
 
-    #[cfg(feature = "cbor")]
-    #[doc(hidden)]
-    pub use ciborium;
+        let env = {
+            let mut builder = Environment::builder();
+            builder.set_max_dbs(2);
+            builder.set_geometry(Geometry {
+                size: Some(1_000_000..1_000_000),
+                ..Default::default()
+            });
+            builder.open(dir.path()).expect("open mdbx env")
+        };
+
+        for height in 0..1000 {
+            let mut value = [0u8; 8];
+            LittleEndian::write_u64(&mut value, height);
+            let tx = env.begin_rw_txn().expect("begin_rw_txn");
+            let index = tx
+                .create_db(None, DatabaseFlags::DUP_SORT)
+                .expect("open index db");
+            tx.put(index.dbi(), HEIGHT_KEY, value, WriteFlags::empty())
+                .expect("tx.put");
+            tx.commit().expect("tx.commit");
+        }
+    }
 }
-
-#[cfg(feature = "orm")]
-pub use orm_uses::*;
